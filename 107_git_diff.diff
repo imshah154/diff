@@ -1,0 +1,303 @@
+diff --git a/src/bgp/bgp_config.cc b/src/bgp/bgp_config.cc
+index c157ac2..7625699 100644
+--- a/src/bgp/bgp_config.cc
++++ b/src/bgp/bgp_config.cc
+@@ -151,6 +151,7 @@ BgpNeighborConfig::BgpNeighborConfig()
+           admin_down_(false),
+           passive_(false),
+           as_override_(false),
++          origin_override_(false),
+           peer_as_(0),
+           identifier_(0),
+           port_(BgpConfigManager::kDefaultPort),
+@@ -169,6 +170,8 @@ void BgpNeighborConfig::CopyValues(const BgpNeighborConfig &rhs) {
+     admin_down_ = rhs.admin_down_;
+     passive_ = rhs.passive_;
+     as_override_ = rhs.as_override_;
++    bgp_origin_ = rhs.bgp_origin_;
++    origin_override_ = rhs.origin_override_;
+     private_as_action_  = rhs.private_as_action_;
+     peer_as_ = rhs.peer_as_;
+     identifier_ = rhs.identifier_;
+@@ -193,6 +196,8 @@ int BgpNeighborConfig::CompareTo(const BgpNeighborConfig &rhs) const {
+     KEY_COMPARE(admin_down_, rhs.admin_down_);
+     KEY_COMPARE(passive_, rhs.passive_);
+     KEY_COMPARE(as_override_, rhs.as_override_);
++    KEY_COMPARE(bgp_origin_, rhs.bgp_origin_);
++    KEY_COMPARE(origin_override_, rhs.origin_override_);
+     KEY_COMPARE(private_as_action_, rhs.private_as_action_);
+     KEY_COMPARE(peer_as_, rhs.peer_as_);
+     KEY_COMPARE(identifier_, rhs.identifier_);
+diff --git a/src/bgp/bgp_config.h b/src/bgp/bgp_config.h
+index c281861..ec01bc5 100644
+--- a/src/bgp/bgp_config.h
++++ b/src/bgp/bgp_config.h
+@@ -172,6 +172,12 @@ public:
+     bool as_override() const { return as_override_; }
+     void set_as_override(bool as_override) { as_override_ = as_override; }
+ 
++    std::string bgp_origin() const { return bgp_origin_; }
++    void set_bgp_origin(const std::string &bgp_origin) { bgp_origin_ = bgp_origin; }
++
++    bool origin_override() const { return origin_override_; }
++    void set_origin_override(bool origin_override) { origin_override_ = origin_override; }
++
+     std::string private_as_action() const { return private_as_action_; }
+     void set_private_as_action(const std::string &private_as_action) {
+         private_as_action_ = private_as_action;
+@@ -262,6 +268,8 @@ private:
+     bool admin_down_;
+     bool passive_;
+     bool as_override_;
++    std::string bgp_origin_;
++    bool origin_override_;
+     std::string private_as_action_;
+     uint32_t peer_as_;
+     uint32_t identifier_;
+diff --git a/src/bgp/bgp_config_ifmap.cc b/src/bgp/bgp_config_ifmap.cc
+index 3efe3fc..1e7a712 100644
+--- a/src/bgp/bgp_config_ifmap.cc
++++ b/src/bgp/bgp_config_ifmap.cc
+@@ -244,6 +244,8 @@ static void NeighborSetSessionAttributes(
+     if (attributes != NULL) {
+         neighbor->set_passive(attributes->passive);
+         neighbor->set_as_override(attributes->as_override);
++        neighbor->set_bgp_origin(attributes->bgp_origin);
++        neighbor->set_origin_override(attributes->origin_override);
+         neighbor->set_private_as_action(attributes->private_as_action);
+         neighbor->set_loop_count(attributes->loop_count);
+         if (attributes->admin_down) {
+diff --git a/src/bgp/bgp_message_builder.cc b/src/bgp/bgp_message_builder.cc
+index dc59f04..3b31560 100644
+--- a/src/bgp/bgp_message_builder.cc
++++ b/src/bgp/bgp_message_builder.cc
+@@ -26,6 +26,19 @@ bool BgpMessage::StartReach(const RibOut *ribout, const RibOutAttr *roattr,
+     const BgpAttr *attr = roattr->attr();
+ 
+     BgpAttrOrigin *origin = new BgpAttrOrigin(attr->origin());
++    //Get bgp_origin from ribout and check conditions 
++    //0=IGP 1=EGP 2=INCOMPLETE 3=NONE(In case of 3 contrail default behaviour excutes)
++    //BgpAttrOrigin *origin;
++    if (ribout->origin_override() == true)
++    {
++        origin = new BgpAttrOrigin(RibOut::BgpOriginTypeString(ribout->bgp_origin()));
++    }
++    else
++    {
++        origin = new BgpAttrOrigin(attr->origin());
++    }
++
++
+     update.path_attributes.push_back(origin);
+ 
+     if ((route->Afi() == BgpAf::IPv4) && (route->Safi() == BgpAf::Unicast)) {
+diff --git a/src/bgp/bgp_peer.cc b/src/bgp/bgp_peer.cc
+index 9ad6cce..4ba997e 100644
+--- a/src/bgp/bgp_peer.cc
++++ b/src/bgp/bgp_peer.cc
+@@ -408,6 +408,8 @@ BgpPeer::BgpPeer(BgpServer *server, RoutingInstance *instance,
+           passive_(config->passive()),
+           resolve_paths_(config->router_type() == "bgpaas-client"),
+           as_override_(config->as_override()),
++          bgp_origin_(config->bgp_origin()),
++          origin_override_(config->origin_override()),
+           defer_close_(false),
+           graceful_close_(true),
+           vpn_tables_registered_(false),
+@@ -485,6 +487,8 @@ BgpPeer::BgpPeer(BgpServer *server, RoutingInstance *instance,
+     peer_info.set_admin_down(admin_down_);
+     peer_info.set_passive(passive_);
+     peer_info.set_as_override(as_override_);
++    peer_info.set_bgp_origin(bgp_origin_);
++    peer_info.set_origin_override(origin_override_);
+     peer_info.set_router_type(router_type_);
+     peer_info.set_peer_type(
+         PeerType() == BgpProto::IBGP ? "internal" : "external");
+@@ -717,6 +721,18 @@ void BgpPeer::ConfigUpdate(const BgpNeighborConfig *config) {
+         clear_session = true;
+     }
+ 
++    if (bgp_origin_ != config->bgp_origin()) {
++        bgp_origin_ = config->bgp_origin();
++        peer_info.set_bgp_origin(bgp_origin_);
++        clear_session = true;
++    }
++
++    if (origin_override_ != config->origin_override()) {
++        origin_override_ = config->origin_override();
++        peer_info.set_origin_override(origin_override_);
++        clear_session = true;
++    }
++
+     if (router_type_ != config->router_type()) {
+         router_type_ = config->router_type();
+         peer_info.set_router_type(router_type_);
+@@ -2166,6 +2182,8 @@ void BgpPeer::FillNeighborInfo(const BgpSandeshContext *bsc,
+     bnr->set_admin_down(admin_down_);
+     bnr->set_passive(passive_);
+     bnr->set_as_override(as_override_);
++    bnr->set_bgp_origin(bgp_origin_);
++    bnr->set_origin_override(origin_override_);
+     bnr->set_private_as_action(private_as_action_);
+     bnr->set_peer_address(peer_address_string());
+     bnr->set_peer_id(bgp_identifier_string());
+diff --git a/src/bgp/bgp_peer.h b/src/bgp/bgp_peer.h
+index f6cedb7..d99d6ad 100644
+--- a/src/bgp/bgp_peer.h
++++ b/src/bgp/bgp_peer.h
+@@ -450,6 +450,8 @@ private:
+     bool passive_;
+     bool resolve_paths_;
+     bool as_override_;
++    string bgp_origin_;
++    bool origin_override_;
+     string private_as_action_;
+ 
+     tbb::atomic<int> membership_req_pending_;
+diff --git a/src/bgp/bgp_peer.sandesh b/src/bgp/bgp_peer.sandesh
+index 26743c4..ce63f79 100644
+--- a/src/bgp/bgp_peer.sandesh
++++ b/src/bgp/bgp_peer.sandesh
+@@ -86,6 +86,8 @@ struct BgpNeighborResp {
+     47: bool admin_down;
+     48: bool passive;
+     55: bool as_override;
++    63: string bgp_origin;
++    64: bool origin_override;
+     61: string private_as_action;
+     62: bool send_ready;
+     50: u32 peer_port;
+@@ -634,6 +636,8 @@ struct ShowBgpNeighborConfig {
+     13: bool admin_down;
+     15: bool passive;
+     20: bool as_override;
++    22: string bgp_origin;
++    23: bool origin_override;
+     21: string private_as_action;
+     18: string router_type;
+     8: string local_identifier;
+@@ -688,6 +692,8 @@ struct BgpPeerInfoData {
+     23: optional bool admin_down;
+     24: optional bool passive;
+     27: optional bool as_override;
++    32: optional string bgp_origin;
++    33: optional bool origin_override;
+     25: optional string router_type;      // bgp_schema.xsd:BgpRouterType
+     3: optional string peer_type;         // internal/external
+     20: optional string peer_address;
+diff --git a/src/bgp/bgp_rib_policy.cc b/src/bgp/bgp_rib_policy.cc
+index 9474a9d..72e9867 100644
+--- a/src/bgp/bgp_rib_policy.cc
++++ b/src/bgp/bgp_rib_policy.cc
+@@ -93,6 +93,8 @@ bool RibExportPolicy::operator<(const RibExportPolicy &rhs) const {
+     BOOL_KEY_COMPARE(type, rhs.type);
+     BOOL_KEY_COMPARE(as_number, rhs.as_number);
+     BOOL_KEY_COMPARE(as_override, rhs.as_override);
++    BOOL_KEY_COMPARE(bgp_origin, rhs.bgp_origin);
++    BOOL_KEY_COMPARE(origin_override, rhs.origin_override);
+     BOOL_KEY_COMPARE(nexthop, rhs.nexthop);
+     BOOL_KEY_COMPARE(affinity, rhs.affinity);
+     BOOL_KEY_COMPARE(llgr, rhs.llgr);
+diff --git a/src/bgp/bgp_rib_policy.h b/src/bgp/bgp_rib_policy.h
+index d6fc6bb..9d5ea6a 100644
+--- a/src/bgp/bgp_rib_policy.h
++++ b/src/bgp/bgp_rib_policy.h
+@@ -69,6 +69,8 @@ struct RibExportPolicy {
+     Encoding encoding;
+     as_t as_number;
+     bool as_override;
++    std::string bgp_origin;
++    bool origin_override;
+     IpAddress nexthop;
+     int affinity;
+     bool llgr;
+diff --git a/src/bgp/bgp_ribout.cc b/src/bgp/bgp_ribout.cc
+index 41bbc3e..fa2f7ba 100644
+--- a/src/bgp/bgp_ribout.cc
++++ b/src/bgp/bgp_ribout.cc
+@@ -279,6 +279,8 @@ RibOut::RibOut(BgpTable *table, BgpUpdateSender *sender,
+             name_ += " Nexthop " + policy_.nexthop.to_string();
+         if (policy_.as_override)
+             name_ += " ASOverride";
++       // if (policy_.bgp_origin)
++       //     name_ += " BgpOrigin";
+         name_ += ")";
+     }
+     for (int idx = 0; idx < DB::PartitionCount(); ++idx) {
+diff --git a/src/bgp/bgp_ribout.h b/src/bgp/bgp_ribout.h
+index 5ef86cb..ed7f700 100644
+--- a/src/bgp/bgp_ribout.h
++++ b/src/bgp/bgp_ribout.h
+@@ -291,6 +291,9 @@ public:
+     BgpProto::BgpPeerType peer_type() const { return policy_.type; }
+     as_t peer_as() const { return policy_.as_number; }
+     bool as_override() const { return policy_.as_override; }
++    //int bgp_origin() const { return policy_.bgp_origin; }
++    std::string bgp_origin() const { return policy_.bgp_origin; }
++    bool origin_override() const { return policy_.origin_override; }
+     bool llgr() const { return policy_.llgr; }
+     const IpAddress &nexthop() const { return policy_.nexthop; }
+     bool IsEncodingXmpp() const {
+@@ -315,6 +318,19 @@ public:
+ 
+     void FillStatisticsInfo(std::vector<ShowRibOutStatistics> *sros_list) const;
+ 
++    static int BgpOriginTypeString(std::string bgp_origin_type) {
++        if(bgp_origin_type ==  "IGP"){
++            return 0;
++        }
++        else if( bgp_origin_type ==  "EGP") {
++            return 1;
++        }
++        else if(bgp_origin_type ==  "INCOMPLETE") {
++            return 2;
++        }
++        return -1;
++}
++
+ private:
+     struct PeerState {
+         explicit PeerState(IPeerUpdate *key) : peer(key), index(-1) {
+diff --git a/src/bgp/bgp_show_config.cc b/src/bgp/bgp_show_config.cc
+index 0f57bfe..40db8a8 100644
+--- a/src/bgp/bgp_show_config.cc
++++ b/src/bgp/bgp_show_config.cc
+@@ -330,6 +330,8 @@ static void FillBgpNeighborConfigInfo(ShowBgpNeighborConfig *sbnc,
+     sbnc->set_admin_down(neighbor->admin_down());
+     sbnc->set_passive(neighbor->passive());
+     sbnc->set_as_override(neighbor->as_override());
++    sbnc->set_bgp_origin(neighbor->bgp_origin());
++    sbnc->set_origin_override(neighbor->origin_override());
+     sbnc->set_private_as_action(neighbor->private_as_action());
+     sbnc->set_router_type(neighbor->router_type());
+     sbnc->set_local_identifier(neighbor->local_identifier_string());
+diff --git a/src/schema/bgp_schema.xsd b/src/schema/bgp_schema.xsd
+index e451518..c0093c2 100644
+--- a/src/schema/bgp_schema.xsd
++++ b/src/schema/bgp_schema.xsd
+@@ -192,6 +192,15 @@
+          description='There can be upto 3 instances BGP session attributes, representing configuration for both ends and common. Currently only 1 instance repres
+ </xsd:complexType>
+ 
++<xsd:simpleType name='BgpOriginType'>
++    <xsd:restriction base="xsd:string">
++        <xsd:enumeration value='IGP'/>
++        <xsd:enumeration value='EGP'/>
++        <xsd:enumeration value='INCOMPLETE'/>
++    </xsd:restriction>
++</xsd:simpleType>
++
+ <xsd:complexType name='BgpSessionAttributes'>
+     <xsd:annotation>
+         <xsd:documentation>
+@@ -204,6 +213,10 @@
+             speaker AS in the AS Path.
+         </xsd:documentation>
+     </xsd:annotation>
++       <xsd:element name='bgp-origin' type='BgpOriginType' required='optional' operations='CRUD' description="User define route origin value possible values are 
++       <xsd:element name="origin-override" type="xsd:boolean" default="false" required='optional' operations='CRUD'
++         description='Mark this to override BGP origin'/>
++
+     <xsd:element name='bgp-router' type='xsd:string' required='optional' operations='CRUD'
+          description='When the parameters are uni-directional the bgp-router element specifies to which node the configuration applies. If missing the attributes
+     <xsd:element name="admin-down" type="xsd:boolean" default="false" required='optional' operations='CRUD'
