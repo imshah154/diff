@@ -76,8 +76,7 @@ index dc59f04..3b31560 100644
  
      BgpAttrOrigin *origin = new BgpAttrOrigin(attr->origin());
 +    //Get bgp_origin from ribout and check conditions 
-+    //0=IGP 1=EGP 2=INCOMPLETE 3=NONE(In case of 3 contrail default behaviour excutes)
-+    //BgpAttrOrigin *origin;
++    //IGP, EGP, INCOMPLETE (In case of false in origin_override() contrail default behaviour excutes)
 +    if (ribout->origin_override() == true)
 +    {
 +        origin = new BgpAttrOrigin(RibOut::BgpOriginTypeString(ribout->bgp_origin()));
@@ -232,7 +231,6 @@ index 5ef86cb..ed7f700 100644
      BgpProto::BgpPeerType peer_type() const { return policy_.type; }
      as_t peer_as() const { return policy_.as_number; }
      bool as_override() const { return policy_.as_override; }
-+    //int bgp_origin() const { return policy_.bgp_origin; }
 +    std::string bgp_origin() const { return policy_.bgp_origin; }
 +    bool origin_override() const { return policy_.origin_override; }
      bool llgr() const { return policy_.llgr; }
